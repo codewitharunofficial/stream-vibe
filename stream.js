@@ -94,6 +94,9 @@ const streamSong = async (videoId, email, res) => {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                         'Referer': 'https://www.youtube.com/',
                         'Origin': 'https://www.youtube.com',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Connection': 'keep-alive'
                     },
                 });
                 console.log('Stream request successful');
@@ -110,7 +113,7 @@ const streamSong = async (videoId, email, res) => {
         }
 
         // Set headers for streaming
-        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Content-Type', 'audio/webm');
         res.setHeader('Transfer-Encoding', 'chunked');
         console.log('Starting stream...');
 
@@ -141,11 +144,11 @@ const getFromSource = async (id) => {
     console.log('Fetching song from external source...');
     const options = {
         method: 'GET',
-        url: 'https://yt-api.p.rapidapi.com/dl',
+        url: process.env.RAPID_API_BASE_URL,
         params: { id: id, cgeo: 'IN' },
         headers: {
-            'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'b1c26628e0msh3fbbf13ea24b4abp184561jsna2ebae86e910',
-            'x-rapidapi-host': 'yt-api.p.rapidapi.com',
+            'x-rapidapi-key': process.env.RAPID_API_KEY,
+            'x-rapidapi-host': process.env.RAPID_API_HOST,
         },
     };
 
