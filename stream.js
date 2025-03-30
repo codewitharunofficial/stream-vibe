@@ -5,12 +5,15 @@ import Song from './models/Song.js';
 import User from './models/User.js';
 
 const streamSong = async (videoId, email, res) => {
+    console.log(`Streaming song for videoId: ${videoId}, email: ${email}`);
     try {
         // Connect to MongoDB
         await connectToDatabase();
+        console.log('Connected to MongoDB');
 
         // Validate videoId
         if (!videoId) {
+            console.log('Missing videoId');
             res.status(400).json({ error: 'videoId is required' });
             return;
         }
@@ -18,6 +21,7 @@ const streamSong = async (videoId, email, res) => {
         // Fetch song from DB or source
         let fetchedSong;
         let existingSong = await Song.findOne({ id: videoId });
+        console.log('Song in DB:', !!existingSong);
 
         if (existingSong) {
             const linkArray = existingSong.song.adaptiveFormats;
@@ -26,6 +30,7 @@ const streamSong = async (videoId, email, res) => {
             const currentTimeStamp = Math.floor(Date.now() / 1000);
 
             if (!expireTime || parseInt(expireTime) <= currentTimeStamp) {
+                console.log('Song URL expired, fetching new URL');
                 fetchedSong = await getFromSource(videoId);
                 if (fetchedSong) {
                     existingSong = await Song.findOneAndUpdate(
@@ -33,11 +38,14 @@ const streamSong = async (videoId, email, res) => {
                         { song: fetchedSong },
                         { upsert: true, new: true }
                     );
+                    console.log('Updated song in DB');
                 }
             } else {
                 fetchedSong = existingSong.song;
+                console.log('Using existing song URL');
             }
         } else {
+            console.log('Song not in DB, fetching from source');
             fetchedSong = await getFromSource(videoId);
             if (fetchedSong) {
                 existingSong = await Song.findOneAndUpdate(
@@ -45,10 +53,12 @@ const streamSong = async (videoId, email, res) => {
                     { song: fetchedSong },
                     { upsert: true, new: true }
                 );
+                console.log('Saved new song to DB');
             }
         }
 
         if (!fetchedSong) {
+            console.log('Song not found');
             res.status(404).json({ error: 'Song not found' });
             return;
         }
@@ -64,26 +74,50 @@ const streamSong = async (videoId, email, res) => {
                 isExplicit: fetchedSong.isExplicit || false,
             };
             await updateUserHistory(email, songData);
+            console.log('Updated user history');
         }
 
         // Get the streaming URL
         const streamUrl = fetchedSong.adaptiveFormats[fetchedSong.adaptiveFormats.length - 1].url;
+        console.log('Streaming URL:', streamUrl);
 
-        // Stream the audio
-        const response = await axios({
-            method: 'get',
-            url: streamUrl,
-            responseType: 'stream',
-        });
+        // Stream the audio with retries
+        let streamResponse;
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                streamResponse = await axios({
+                    method: 'get',
+                    url: streamUrl,
+                    responseType: 'stream',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Referer': 'https://www.youtube.com/',
+                        'Origin': 'https://www.youtube.com',
+                    },
+                });
+                console.log('Stream request successful');
+                break; // Exit the retry loop on success
+            } catch (error) {
+                console.error(`Attempt ${attempt} failed:`, error.response?.status, error.message);
+                if (attempt === maxRetries) {
+                    console.error('Max retries reached, failing...');
+                    throw error;
+                }
+                // Wait before retrying
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            }
+        }
 
         // Set headers for streaming
         res.setHeader('Content-Type', 'audio/mpeg');
         res.setHeader('Transfer-Encoding', 'chunked');
+        console.log('Starting stream...');
 
         // Pipe the stream to the response
-        response.data.pipe(res);
+        streamResponse.data.pipe(res);
 
-        response.data.on('error', (error) => {
+        streamResponse.data.on('error', (error) => {
             console.error('Stream error:', error);
             if (!res.headersSent) {
                 res.status(500).json({ error: 'Failed to stream audio' });
@@ -91,12 +125,13 @@ const streamSong = async (videoId, email, res) => {
         });
 
         res.on('close', () => {
-            response.data.destroy();
+            console.log('Stream closed by client');
+            streamResponse.data.destroy();
         });
     } catch (error) {
         console.error('Error streaming song:', error);
         if (!res.headersSent) {
-            res.status(500).json({ error: 'Internal server error' });
+            res.status(500).json({ error: 'Internal server error', details: error.message });
         }
     }
 };
@@ -109,7 +144,7 @@ const getFromSource = async (id) => {
         url: 'https://yt-api.p.rapidapi.com/dl',
         params: { id: id, cgeo: 'IN' },
         headers: {
-            'x-rapidapi-key': "b1c26628e0msh3fbbf13ea24b4abp184561jsna2ebae86e910",
+            'x-rapidapi-key': process.env.RAPIDAPI_KEY || 'b1c26628e0msh3fbbf13ea24b4abp184561jsna2ebae86e910',
             'x-rapidapi-host': 'yt-api.p.rapidapi.com',
         },
     };
