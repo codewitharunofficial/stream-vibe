@@ -5,7 +5,7 @@ import Song from './models/Song.js';
 import User from './models/User.js';
 
 const streamSong = async (videoId, email, res) => {
-    console.log(`Streaming song for videoId: ${videoId}, email: ${email}`);
+    console.log(`Handling song request for videoId: ${videoId}, email: ${email}`);
     try {
         // Connect to MongoDB
         await connectToDatabase();
@@ -79,75 +79,12 @@ const streamSong = async (videoId, email, res) => {
 
         // Get the streaming URL
         const streamUrl = fetchedSong.adaptiveFormats[fetchedSong.adaptiveFormats.length - 1].url;
-        console.log('Streaming URL:', streamUrl);
+        console.log('Redirecting to streaming URL:', streamUrl);
 
-        // Try to stream the audio with retries
-        let streamResponse;
-        const maxRetries = 3;
-        let success = false;
-
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                streamResponse = await axios({
-                    method: 'get',
-                    url: streamUrl,
-                    responseType: 'stream',
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Referer': 'https://www.youtube.com/',
-                        'Origin': 'https://www.youtube.com',
-                        'Accept': '*/*',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'identity', // Avoid compression issues
-                        'Connection': 'keep-alive',
-                    },
-                });
-                console.log('Stream request successful, status:', streamResponse.status);
-                success = true;
-                break; // Exit the retry loop on success
-            } catch (error) {
-                console.error(`Attempt ${attempt} failed:`, error.response?.status, error.message);
-                if (error.response?.status === 403) {
-                    console.error('403 Forbidden: YouTube rejected the request');
-                    console.error('Response headers:', error.response?.headers);
-                }
-                if (attempt === maxRetries) {
-                    console.error('Max retries reached, falling back to redirect...');
-                    // Fallback: Redirect the client to the streaming URL directly
-                    res.redirect(streamUrl);
-                    return;
-                }
-                // Wait before retrying
-                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
-            }
-        }
-
-        if (!success) {
-            console.error('Streaming failed after all retries');
-            return; // The redirect has already been handled
-        }
-
-        // Set headers for streaming
-        res.setHeader('Content-Type', 'audio/webm');
-        res.setHeader('Transfer-Encoding', 'chunked');
-        console.log('Starting stream...');
-
-        // Pipe the stream to the response
-        streamResponse.data.pipe(res);
-
-        streamResponse.data.on('error', (error) => {
-            console.error('Stream error:', error);
-            if (!res.headersSent) {
-                res.status(500).json({ error: 'Failed to stream audio' });
-            }
-        });
-
-        res.on('close', () => {
-            console.log('Stream closed by client');
-            streamResponse.data.destroy();
-        });
+        // Redirect the client to the streaming URL
+        res.redirect(streamUrl);
     } catch (error) {
-        console.error('Error streaming song:', error);
+        console.error('Error handling song request:', error);
         if (!res.headersSent) {
             res.status(500).json({ error: 'Internal server error', details: error.message });
         }
@@ -159,11 +96,11 @@ const getFromSource = async (id) => {
     console.log('Fetching song from external source...');
     const options = {
         method: 'GET',
-        url: process.env.RAPID_API_BASE_URL || 'https://yt-api.p.rapidapi.com/dl',
+        url: process.env.RAPID_API_BASE_URL,
         params: { id: id, cgeo: 'IN' },
         headers: {
-            'x-rapidapi-key': process.env.RAPID_API_KEY || 'b1c26628e0msh3fbbf13ea24b4abp184561jsna2ebae86e910',
-            'x-rapidapi-host': process.env.RAPID_API_HOST || 'yt-api.p.rapidapi.com',
+            'x-rapidapi-key': process.env.RAPID_API_KEY,
+            'x-rapidapi-host': process.env.RAPID_API_HOST,
         },
     };
 
