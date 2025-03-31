@@ -81,9 +81,11 @@ const streamSong = async (videoId, email, res) => {
         const streamUrl = fetchedSong.adaptiveFormats[fetchedSong.adaptiveFormats.length - 1].url;
         console.log('Streaming URL:', streamUrl);
 
-        // Stream the audio with retries
+        // Try to stream the audio with retries
         let streamResponse;
         const maxRetries = 3;
+        let success = false;
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 streamResponse = await axios({
@@ -94,22 +96,35 @@ const streamSong = async (videoId, email, res) => {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                         'Referer': 'https://www.youtube.com/',
                         'Origin': 'https://www.youtube.com',
+                        'Accept': '*/*',
                         'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Connection': 'keep-alive'
+                        'Accept-Encoding': 'identity', // Avoid compression issues
+                        'Connection': 'keep-alive',
                     },
                 });
-                console.log('Stream request successful');
+                console.log('Stream request successful, status:', streamResponse.status);
+                success = true;
                 break; // Exit the retry loop on success
             } catch (error) {
                 console.error(`Attempt ${attempt} failed:`, error.response?.status, error.message);
+                if (error.response?.status === 403) {
+                    console.error('403 Forbidden: YouTube rejected the request');
+                    console.error('Response headers:', error.response?.headers);
+                }
                 if (attempt === maxRetries) {
-                    console.error('Max retries reached, failing...');
-                    throw error;
+                    console.error('Max retries reached, falling back to redirect...');
+                    // Fallback: Redirect the client to the streaming URL directly
+                    res.redirect(streamUrl);
+                    return;
                 }
                 // Wait before retrying
                 await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
             }
+        }
+
+        if (!success) {
+            console.error('Streaming failed after all retries');
+            return; // The redirect has already been handled
         }
 
         // Set headers for streaming
@@ -144,11 +159,11 @@ const getFromSource = async (id) => {
     console.log('Fetching song from external source...');
     const options = {
         method: 'GET',
-        url: process.env.RAPID_API_BASE_URL,
+        url: process.env.RAPID_API_BASE_URL || 'https://yt-api.p.rapidapi.com/dl',
         params: { id: id, cgeo: 'IN' },
         headers: {
-            'x-rapidapi-key': process.env.RAPID_API_KEY,
-            'x-rapidapi-host': process.env.RAPID_API_HOST,
+            'x-rapidapi-key': process.env.RAPID_API_KEY || 'b1c26628e0msh3fbbf13ea24b4abp184561jsna2ebae86e910',
+            'x-rapidapi-host': process.env.RAPID_API_HOST || 'yt-api.p.rapidapi.com',
         },
     };
 
