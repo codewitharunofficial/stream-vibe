@@ -68,7 +68,7 @@ const streamSong = async (videoId, email, res) => {
             const songData = {
                 videoId: videoId,
                 title: fetchedSong.title,
-                author: fetchedSong.author,
+                author: fetchedSong.keywords[fetchedSong.keywords.length - 1],
                 thumbnail: fetchedSong.thumbnail[fetchedSong.thumbnail.length - 1].url,
                 duration: fetchedSong.duration,
                 isExplicit: fetchedSong.isExplicit || false,
@@ -128,7 +128,7 @@ const updateUserHistory = async (email, songData) => {
         let recentlyPlayed = user.recently_played || [];
         let mostPlayed = user.most_played || [];
 
-        // Remove song if it already exists in recently played, then add at index 0
+
         recentlyPlayed = recentlyPlayed.filter((item) => item.videoId !== songData.videoId);
         recentlyPlayed.unshift(songData);
 
