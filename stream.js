@@ -1,160 +1,73 @@
-// src/stream.js
-import axios from 'axios';
+// stream.js
 import { connectToDatabase } from './lib/mongodb.js';
 import Song from './models/Song.js';
-import User from './models/User.js';
+import { getFromSource } from './utils/fetchFromSource.js';
+import { updateUserHistory } from './jobs/updateUserHistory.js';
+import { isValidEmail } from './utils/validateEmail.js';
+import songCache from './cache/songCache.js';
 
 const streamSong = async (videoId, email, res) => {
-    console.log(`Handling song request for videoId: ${videoId}, email: ${email}`);
     try {
-        // Connect to MongoDB
         await connectToDatabase();
-        console.log('Connected to MongoDB');
 
-        // Validate videoId
-        if (!videoId) {
-            console.log('Missing videoId');
-            res.status(400).json({ error: 'videoId is required' });
-            return;
-        }
+        if (!videoId) return res.status(400).json({ error: 'videoId is required' });
 
-        // Fetch song from DB or source
-        let fetchedSong;
-        let existingSong = await Song.findOne({ id: videoId });
-        console.log('Song in DB:', !!existingSong);
+        const cacheKey = `song:${videoId}`;
+        let songData = songCache.get(cacheKey);
 
-        if (existingSong) {
-            const linkArray = existingSong.song.adaptiveFormats;
-            const url = new URL(linkArray[linkArray.length - 1].url);
-            const expireTime = url.searchParams.get('expire');
-            const currentTimeStamp = Math.floor(Date.now() / 1000);
+        if (!songData) {
+            let songDoc = await Song.findOne({ id: videoId });
 
-            if (!expireTime || parseInt(expireTime) <= currentTimeStamp) {
-                console.log('Song URL expired, fetching new URL');
-                fetchedSong = await getFromSource(videoId);
-                if (fetchedSong) {
-                    existingSong = await Song.findOneAndUpdate(
-                        { id: videoId },
-                        { song: fetchedSong },
-                        { upsert: true, new: true }
-                    );
-                    console.log('Updated song in DB');
+            const isExpired = () => {
+                try {
+                    const linkArray = songDoc.song.adaptiveFormats;
+                    const url = new URL(linkArray[linkArray.length - 1].url);
+                    const expire = url.searchParams.get('expire');
+                    return !expire || parseInt(expire) <= Math.floor(Date.now() / 1000);
+                } catch {
+                    return true;
                 }
-            } else {
-                fetchedSong = existingSong.song;
-                console.log('Using existing song URL');
-            }
-        } else {
-            console.log('Song not in DB, fetching from source');
-            fetchedSong = await getFromSource(videoId);
-            if (fetchedSong) {
-                existingSong = await Song.findOneAndUpdate(
+            };
+
+            if (!songDoc || isExpired()) {
+                const freshSong = await getFromSource(videoId);
+                if (!freshSong) return res.status(404).json({ error: 'Could not fetch song' });
+
+                songDoc = await Song.findOneAndUpdate(
                     { id: videoId },
-                    { song: fetchedSong },
+                    { song: freshSong },
                     { upsert: true, new: true }
                 );
-                console.log('Saved new song to DB');
+                console.log('[Song] Fetched and saved fresh song data');
             }
-        }
 
-        if (!fetchedSong) {
-            console.log('Song not found');
-            res.status(404).json({ error: 'Song not found' });
-            return;
-        }
-
-        // Update user history if email is provided
-        if (email) {
-            const songData = {
-                videoId: videoId,
-                title: fetchedSong.title,
-                author: fetchedSong.keywords[fetchedSong.keywords.length - 1],
-                thumbnail: fetchedSong.thumbnail[fetchedSong.thumbnail.length - 1].url,
-                duration: fetchedSong.duration,
-                isExplicit: fetchedSong.isExplicit || false,
-            };
-            await updateUserHistory(email, songData);
-            console.log('Updated user history');
-        }
-
-        // Get the streaming URL
-        const streamUrl = fetchedSong.adaptiveFormats[fetchedSong.adaptiveFormats.length - 1].url;
-        console.log('Redirecting to streaming URL:', streamUrl);
-
-        // Redirect the client to the streaming URL
-        res.redirect(streamUrl);
-    } catch (error) {
-        console.error('Error handling song request:', error);
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Internal server error', details: error.message });
-        }
-    }
-};
-
-// Fetch song from external source
-const getFromSource = async (id) => {
-    console.log('Fetching song from external source...');
-    const options = {
-        method: 'GET',
-        url: process.env.RAPID_API_BASE_URL,
-        params: { id: id, cgeo: 'IN' },
-        headers: {
-            'x-rapidapi-key': process.env.RAPID_API_KEY,
-            'x-rapidapi-host': process.env.RAPID_API_HOST,
-        },
-    };
-
-    try {
-        const { data } = await axios.request(options);
-        if (data.status === 'OK') {
-            return data;
-        }
-        throw new Error('Failed to fetch song from source');
-    } catch (error) {
-        console.error('Error fetching from source:', error);
-        throw new Error(error.message);
-    }
-};
-
-// Update Recently Played & Most Played
-const updateUserHistory = async (email, songData) => {
-    try {
-        if (!songData) return;
-
-        const user = await User.findOne({ email });
-
-        if (!user) return;
-
-        let recentlyPlayed = user.recently_played || [];
-        let mostPlayed = user.most_played || [];
-
-
-        recentlyPlayed = recentlyPlayed.filter((item) => item.videoId !== songData.videoId);
-        recentlyPlayed.unshift(songData);
-
-        // Check if song is already in mostPlayed
-        const songIndex = mostPlayed.findIndex((item) => item.videoId === songData.videoId);
-
-        if (songIndex !== -1) {
-            // If song exists, increase count
-            mostPlayed[songIndex].count += 1;
+            songData = songDoc.song;
+            songCache.set(cacheKey, songData);
         } else {
-            // If song does not exist, add with count 1
-            mostPlayed.push({ ...songData, count: 1 });
+            console.log('[Cache] Used cached song data');
         }
 
-        // Update user history
-        await User.findOneAndUpdate(
-            { email },
-            {
-                $set: { recently_played: recentlyPlayed, most_played: mostPlayed },
-            },
-            { upsert: true, new: true }
-        );
+        // Send redirect immediately
+        const streamUrl = songData.adaptiveFormats.at(-1).url;
+        res.redirect(streamUrl);
 
-        console.log('Updated user history for:', email);
-    } catch (error) {
-        console.error('Error updating user history:', error);
+        // Update user history async (fire-and-forget)
+        if (email && isValidEmail(email)) {
+            const historyData = {
+                videoId,
+                title: songData.title,
+                author: songData.keywords?.at(-1) || 'Unknown',
+                thumbnail: songData.thumbnail?.at(-1)?.url,
+                duration: songData.duration,
+                isExplicit: songData.isExplicit || false,
+            };
+
+            setImmediate(() => updateUserHistory(email, historyData));
+        }
+
+    } catch (err) {
+        console.error('[StreamError]', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
     }
 };
 

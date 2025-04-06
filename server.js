@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import streamSong from './stream.js';
+import { connectToDatabase } from './lib/mongodb.js';
 
 dotenv.config();
 
@@ -9,10 +10,12 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 
+await connectToDatabase();
+
+
 app.use(express.json());
 app.use(cors());
 
-// Streaming endpoint
 app.get('/play', async (req, res) => {
     const { videoId, email } = req.query;
 
